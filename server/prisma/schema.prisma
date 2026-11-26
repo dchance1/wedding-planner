@@ -12,12 +12,298 @@ datasource db {
   provider = "postgresql"
 }
 
+// ==========================================
+// ENUMS
+// ==========================================
+
+// Controls permissions within a wedding workspace.
+enum WeddingRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+// Track the status of wedding tasks.
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// Track the RSVP status of wedding guests.
+enum RSVPStatus {
+  PENDING
+  ATTENDING
+  DECLINED
+  MAYBE
+}
+
+// Track the status of wedding expenses.
+enum ExpenseStatus {
+  PLANNED
+  COMMITTED
+  PAID
+}
+
+// Track the status of wedding vendors.
+enum VendorStatus {
+  RESEARCHING
+  CONTACTED
+  BOOKED
+  CANCELLED
+}
+
+// Track the status of wedding payments.
+enum PaymentStatus {
+  PENDING
+  PAID
+}
+
+// ==========================================
+// USERS & AUTHENTICATION
+// ==========================================
+
 model User {
-  id           String   @id @default(uuid())
+  id           String   @id @default(uuid()) @db.Uuid
   email        String   @unique
-  passwordHash String
-  firstName    String
-  lastName     String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  passwordHash String   @map("password_hash")
+  name         String
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  sessions      Session[]
+  ownedWeddings Wedding[]       @relation("WeddingCreator")
+  memberships   WeddingMember[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ==========================================
+// WEDDINGS & MEMBERS
+// ==========================================
+
+model Wedding {
+  id              String    @id @default(uuid()) @db.Uuid
+  name            String
+  weddingDate     DateTime? @map("wedding_date") @db.Date
+  venue           String?
+  location        String?
+  estimatedGuests Int?      @map("estimated_guests")
+  currency        String    @default("USD") @db.VarChar(3)
+  createdById     String    @map("created_by_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  creator          User             @relation("WeddingCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  members          WeddingMember[]
+  tasks            Task[]
+  guests           Guest[]
+  budgetCategories BudgetCategory[]
+  expenses         Expense[]
+  vendors          Vendor[]
+  vendorPayments   VendorPayment[]
+  timelineEvents   TimelineEvent[]
+
+  @@index([createdById])
+  @@index([weddingDate])
+  @@map("weddings")
+}
+
+model WeddingMember {
+  id        String      @id @default(uuid()) @db.Uuid
+  weddingId String      @map("wedding_id") @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  role      WeddingRole @default(EDITOR)
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  wedding Wedding @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([weddingId, userId])
+  @@index([userId])
+  @@map("wedding_members")
+}
+
+// ==========================================
+// WEDDING TASKS
+// ==========================================
+
+model Task {
+  id          String       @id @default(uuid()) @db.Uuid
+  weddingId   String       @map("wedding_id") @db.Uuid
+  title       String
+  description String?
+  status      TaskStatus   @default(TODO)
+  priority    TaskPriority @default(MEDIUM)
+  dueDate     DateTime?    @map("due_date") @db.Date
+  completedAt DateTime?    @map("completed_at")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  wedding Wedding @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+
+  @@index([weddingId, status])
+  @@index([weddingId, dueDate])
+  @@map("tasks")
+}
+
+// ==========================================
+// WEDDING GUESTS
+// ==========================================
+
+model Guest {
+  id             String     @id @default(uuid()) @db.Uuid
+  weddingId      String     @map("wedding_id") @db.Uuid
+  firstName      String     @map("first_name")
+  lastName       String     @map("last_name")
+  email          String?
+  phone          String?
+  rsvpStatus     RSVPStatus @default(PENDING) @map("rsvp_status")
+  plusOneAllowed Boolean    @default(false) @map("plus_one_allowed")
+  plusOneName    String?    @map("plus_one_name")
+  notes          String?
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  wedding Wedding @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+
+  @@index([weddingId, rsvpStatus])
+  @@index([weddingId, lastName])
+  @@map("guests")
+}
+
+// ==========================================
+// WEDDING BUDGET
+// ==========================================
+
+model BudgetCategory {
+  id            String   @id @default(uuid()) @db.Uuid
+  weddingId     String   @map("wedding_id") @db.Uuid
+  name          String
+  plannedAmount Decimal  @default(0) @map("planned_amount") @db.Decimal(12, 2)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  wedding  Wedding   @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  @@unique([weddingId, name])
+  @@map("budget_categories")
+}
+
+model Expense {
+  id         String        @id @default(uuid()) @db.Uuid
+  weddingId  String        @map("wedding_id") @db.Uuid
+  categoryId String        @map("category_id") @db.Uuid
+  vendorId   String?       @map("vendor_id") @db.Uuid
+  name       String
+  amount     Decimal       @db.Decimal(12, 2)
+  status     ExpenseStatus @default(PLANNED)
+  dueDate    DateTime?     @map("due_date") @db.Date
+  paidAt     DateTime?     @map("paid_at")
+  notes      String?
+  createdAt  DateTime      @default(now()) @map("created_at")
+  updatedAt  DateTime      @updatedAt @map("updated_at")
+
+  wedding  Wedding        @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  category BudgetCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  vendor   Vendor?        @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([weddingId, status])
+  @@index([categoryId])
+  @@index([vendorId])
+  @@index([weddingId, dueDate])
+  @@map("expenses")
+}
+
+// ==========================================
+// WEDDING VENDORS
+// ==========================================
+
+model Vendor {
+  id            String       @id @default(uuid()) @db.Uuid
+  weddingId     String       @map("wedding_id") @db.Uuid
+  name          String
+  category      String?
+  contactName   String?      @map("contact_name")
+  email         String?
+  phone         String?
+  website       String?
+  estimatedCost Decimal?     @map("estimated_cost") @db.Decimal(12, 2)
+  status        VendorStatus @default(RESEARCHING)
+  notes         String?
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  wedding  Wedding         @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+  payments VendorPayment[]
+
+  @@index([weddingId, status])
+  @@index([weddingId, name])
+  @@map("vendors")
+}
+
+model VendorPayment {
+  id          String        @id @default(uuid()) @db.Uuid
+  weddingId   String        @map("wedding_id") @db.Uuid
+  vendorId    String        @map("vendor_id") @db.Uuid
+  description String?
+  amount      Decimal       @db.Decimal(12, 2)
+  dueDate     DateTime?     @map("due_date") @db.Date
+  status      PaymentStatus @default(PENDING)
+  paidAt      DateTime?     @map("paid_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  wedding Wedding @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  vendor  Vendor  @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+
+  @@index([weddingId, status])
+  @@index([vendorId])
+  @@index([weddingId, dueDate])
+  @@map("vendor_payments")
+}
+
+// ==========================================
+// WEDDING DAY TIMELINE
+// ==========================================
+
+model TimelineEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  weddingId   String    @map("wedding_id") @db.Uuid
+  title       String
+  description String?
+  startTime   DateTime  @map("start_time")
+  endTime     DateTime? @map("end_time")
+  location    String?
+  sortOrder   Int       @default(0) @map("sort_order")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  wedding Wedding @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+
+  @@index([weddingId, startTime])
+  @@index([weddingId, sortOrder])
+  @@map("timeline_events")
 }
